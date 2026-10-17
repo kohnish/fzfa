@@ -269,7 +269,8 @@ not break the in-memory replay path."
   (let ((file (expand-file-name fzfa-replay-file)))
     (when (file-readable-p file)
       (condition-case err
-          (load-file file)
+          (let ((inhibit-message t))
+            (load-file file))
         (error
          (let ((inhibit-message t))
            (message "fzfa-replay-load-list: %s"
