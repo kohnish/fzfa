@@ -5300,6 +5300,8 @@ path's result set)."
         (setq spec (plist-put spec :initial-input input))))
     spec))
 
+(declare-function fzfa-replay-mode "fzfa-replay" (&optional arg))
+
 ;;;###autoload
 (defun fzfa-replay (&optional replay-session)
   "Replay REPLAY-SESSION, or the most recent session interactively.
@@ -5310,8 +5312,12 @@ the most recent capture.  Errors when no session is available.
 
 The picker-route commands (`fzfa-replay-from-memory',
 `fzfa-replay-from-file', `fzfa-replay-any') feed their selection
-through here so all replay paths share one dispatch."
+through here so all replay paths share one dispatch.
+Enables `fzfa-replay-mode' on first use."
   (interactive)
+  (unless (bound-and-true-p fzfa-replay-mode)
+    (require 'fzfa-replay)
+    (fzfa-replay-mode 1))
   (let ((session (or replay-session (car fzfa--sessions))))
     (unless session
       (user-error "No fzfa session to replay"))

@@ -582,8 +582,11 @@ session and replay it as if you'd just invoked the original command.
 Two rings: an in-memory list (current Emacs lifetime, recent
 activity, capped by ~fzfa-sessions-max~), and an on-disk file
 (across Emacs lifetimes capped by ~fzfa-replay-max-saved-items~).
- The disk ring is opt-in via ~fzfa-replay-mode~ — without it,
-replay still works for the current (in-memory) Emacs session.
+The first replay command enables ~fzfa-replay-mode~, schedules loading
+saved history, and installs periodic and exit saves.  To enable persistence
+eagerly, call ~(fzfa-replay-mode 1)~ from your configuration.
+Ordinary completion bootstrap does not enable persistence; sessions are
+recorded in memory until you use a replay command or enable the mode.
 
 ** Commands
 

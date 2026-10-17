@@ -20,8 +20,8 @@
 ;;                       save on `kill-emacs-hook'.
 ;;
 ;; The in-memory ring `fzfa--sessions' is captured by `fzfa--read'
-;; regardless of this extension — replay-from-memory works without
-;; loading anything.  This file adds the disk round-trip.
+;; regardless of this extension.  Replay commands enable persistence
+;; on first use; ordinary completion does not load this file.
 
 ;;; Code:
 
@@ -322,6 +322,8 @@ Three paths:
                fzfa-replay--cache-sessions fzfa-replay--persisted-sessions)
          (funcall callback fzfa-replay--persisted-sessions)))))))
 
+(defvar fzfa-replay-mode)
+
 ;;; Pickers
 
 (defun fzfa-replay--session-to-candidate (session idx)
@@ -495,6 +497,8 @@ need to generalize yet."
 (defun fzfa-replay-from-memory ()
   "Pick from the in-memory session ring (`fzfa--sessions') and replay."
   (interactive)
+  (unless fzfa-replay-mode
+    (fzfa-replay-mode 1))
   (fzfa-replay--picker fzfa--sessions "Replay (memory): "))
 
 (defun fzfa-replay--file-producer (_input cb)
@@ -520,6 +524,8 @@ Subsequent invocations hit the mtime-keyed cache.
 See `fzfa-replay--picker' for why `fzfa-vertico-columns-truncate'
 is forced to `left' here."
   (interactive)
+  (unless fzfa-replay-mode
+    (fzfa-replay-mode 1))
   (let ((fzfa-vertico-columns-truncate 'left))
     (fzfa-replay--action
      (fzfa-completing-read
@@ -554,18 +560,10 @@ is forced to `left' here.  The let-binding wraps `fzfa-multi-read'
 because the actual minibuffer session runs inside it, outside the
 inner from-* commands' let-scope."
   (interactive)
+  (unless fzfa-replay-mode
+    (fzfa-replay-mode 1))
   (let ((fzfa-vertico-columns-truncate 'left))
     (fzfa-multi-read fzfa-replay-any-commands :prompt "Replay (any): ")))
-
-;;;###autoload
-(defun fzfa-replay-setup ()
-  "Enable `fzfa-replay-mode' from `fzfa--ensure-setup'.
-
-Called automatically when `replay' is in `fzfa-extensions'.
-Loading this file via the autoload stub registers the mode; the
-mode toggle hooks in disk persistence (idle save timer, final
-`kill-emacs-hook' save, startup load)."
-  (fzfa-replay-mode 1))
 
 ;;;###autoload
 (define-minor-mode fzfa-replay-mode
@@ -579,9 +577,10 @@ When enabled:
   seconds.
 - Adds a final-save handler on `kill-emacs-hook'.
 
-The in-memory replay path is unaffected — `fzfa-replay' works
-whether or not this mode is on.  This mode only adds the disk
-round-trip."
+Replay commands enable this mode automatically on first use.
+Call `(fzfa-replay-mode 1)' from your configuration to enable
+persistence eagerly.  Ordinary completion records sessions in memory
+without enabling this mode."
   :global t
   :group 'fzfa-replay
   (cond

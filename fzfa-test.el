@@ -3309,7 +3309,8 @@ would dedup to one — see `fzfa-sessions-push-dedups-by-key')."
 
 (ert-deftest fzfa-replay-errors-on-empty-sessions ()
   "`fzfa-replay' signals a `user-error' when there's nothing to replay."
-  (let ((fzfa--sessions nil))
+  (let ((fzfa-replay-mode t)
+        (fzfa--sessions nil))
     (should-error (fzfa-replay) :type 'user-error)))
 
 (ert-deftest fzfa-replay-rebinds-this-command-to-entry-cmd ()
@@ -3322,7 +3323,8 @@ session under `:command fzfa-replay' — the replay machinery's
 name, not the work the user is doing.  With it, extending the
 seeded filter (e.g. \"q\" → \"qe\") lands a fresh `fzfa-fd'
 session in the ring."
-  (let ((captured-this-command nil)
+  (let ((fzfa-replay-mode t)
+        (captured-this-command nil)
         (fzfa--sessions
          (list
           (list :command 'fzfa-fd
@@ -3347,7 +3349,8 @@ Picker-route commands (`fzfa-replay-from-memory' /
 replay paths share one dispatch.  The arg overrides
 `(car fzfa--sessions)' — replaying an off-head session shouldn't
 require shuffling the ring."
-  (let ((seen-prompt nil)
+  (let ((fzfa-replay-mode t)
+        (seen-prompt nil)
         ;; Head of the ring is a fzfa-buffer session — explicit arg
         ;; should win and replay the fzfa-fd one instead.
         (fzfa--sessions
@@ -3623,6 +3626,37 @@ the time / command columns."
   "Group with TRANSFORM non-nil returns the candidate unchanged."
   (let ((cand "any-string"))
     (should (eq (fzfa-replay--group cand t) cand))))
+
+(ert-deftest fzfa-bootstrap-does-not-enable-replay-mode ()
+  "Completion bootstrap leaves persistence to explicit setup."
+  (let ((fzfa--setup-done nil)
+        (fzfa-extensions '(replay))
+        (completion-styles-alist (copy-tree completion-styles-alist)))
+    (cl-letf (((symbol-function 'fzfa-replay-mode)
+               (lambda (&rest _) (ert-fail "Bootstrap enabled replay persistence")))
+              ((symbol-function 'fzf-native-ensure-loaded) #'ignore))
+      (fzfa--ensure-setup)
+      (should fzfa--setup-done))))
+
+(ert-deftest fzfa-replay-commands-enable-persistence-once ()
+  "Each replay entry point enables persistence before opening a session."
+  (dolist (command '(fzfa-replay fzfa-replay-from-memory
+                    fzfa-replay-from-file fzfa-replay-any))
+    (let ((fzfa-replay-mode nil)
+          (fzfa--sessions '((:sources [])))
+          (enables 0))
+      (cl-letf (((symbol-function 'fzfa-replay-mode)
+                 (lambda (arg)
+                   (should (= arg 1))
+                   (setq fzfa-replay-mode t)
+                   (cl-incf enables)))
+                ((symbol-function 'fzfa--read) (lambda (&rest _) nil))
+                ((symbol-function 'fzfa-replay--picker) (lambda (&rest _) nil))
+                ((symbol-function 'fzfa-completing-read) (lambda (&rest _) nil))
+                ((symbol-function 'fzfa-multi-read) (lambda (&rest _) nil)))
+        (funcall command)
+        (funcall command)
+        (should (= enables 1))))))
 
 (ert-deftest fzfa-replay-load-async-missing-file-yields-nil ()
   "No file → callback invoked with nil immediately."
