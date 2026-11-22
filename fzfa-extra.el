@@ -518,8 +518,10 @@ original position, like C-g) and opens the results buffer in
 ;;; Buffer annotations
 
 (defface fzfa-extra-annotation-path
-  '((t :inherit completions-annotations))
-  "Face for the file-path part of `fzfa-extra-annotate-buffer'."
+  '((t (:inherit default)))
+  "Face for the file-path part of `fzfa-extra-annotate-buffer'.
+Plain default-face text: the path is the primary information and
+should not get the light-grey `completions-annotations' look."
   :group 'fzfa)
 
 (defface fzfa-extra-annotation-status
@@ -558,7 +560,12 @@ after the candidate name; active states get
         (when (derived-mode-p 'compilation-mode)
           (push (if (get-buffer-process buf) "compiling" "compiled")
                 status))
-        (when (bound-and-true-p agent-shell--state)
+        ;; `agent-shell--state' is defvar-local WITH an init form, so
+        ;; every buffer lazily gets a fresh non-nil state — the mode
+        ;; check is what actually restricts this to agent-shell
+        ;; buffers.
+        (when (and (derived-mode-p 'agent-shell-mode)
+                   (bound-and-true-p agent-shell--state))
           (let* ((state agent-shell--state)
                  (busy (or (map-elt state :active-requests)
                            (eq (map-elt (map-elt state :heartbeat) :status)
@@ -583,6 +590,27 @@ after the candidate name; active states get
                     (concat path-str "   " status-str))
                    (path-str path-str)
                    (t status-str))))))))
+
+(defun fzfa-extra-buffer-affix (cands)
+  "Affixation-function for `fzfa-extra-buffers'.
+
+Annotates each candidate via `fzfa-extra-annotate-buffer' and pins
+the annotation column just past the widest candidate name using a
+`(space :align-to ...)' display spec — the same trick fzfa's
+multi-source affix uses, since vertico concatenates suffixes
+verbatim with no padding of its own."
+  (let ((maxw (apply #'max 0 (mapcar #'string-width cands))))
+    (cl-mapcar
+     (lambda (cand)
+       (let ((ann (fzfa-extra-annotate-buffer cand)))
+         (list cand ""
+               (if ann
+                   (concat
+                    (propertize " " 'display
+                                `(space :align-to (+ left ,(+ maxw 2))))
+                    ann)
+                 ""))))
+     cands)))
 
 ;;; Commands
 
@@ -638,7 +666,8 @@ too slow for large recentf lists."
          (when-let* ((result (fzfa-completing-read
                               :candidates names :prompt "buffer: "
                               :category 'fzfa-buffer
-                              :annotate #'fzfa-extra-annotate-buffer)))
+                              :annotate #'fzfa-extra-annotate-buffer
+                              :affix #'fzfa-extra-buffer-affix)))
            (fzfa-visit-buffer result)))))))
 
 ;;;###autoload
