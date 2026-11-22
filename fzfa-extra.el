@@ -62,6 +62,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'map)
 
 (defvar fzfa-preview-delay)
 (defvar fzfa-fuzzy)
@@ -128,6 +129,12 @@ the remote command through the remote shell either way."
   "Install `fzfa-extra--tramp-transform' as the spawn transform."
   (setq fzfa-source-spawn-transform-function
         #'fzfa-extra--tramp-transform))
+
+;; Set unconditionally at load time: the transform is only a defvar
+;; assignment, safe before fzfa itself loads (`defvar' in fzfa.el
+;; does not clobber an already-bound value), and every producer spawn
+;; goes through `fzfa--spawn' which consults it.
+(fzfa-extra--tramp-setup)
 
 ;;; Match highlighting in preview buffers
 
@@ -491,14 +498,42 @@ original position, like C-g) and opens the results buffer in
               nil t)
     (abort-minibuffers)))
 
+;;; Buffer annotations
+
+(defvar agent-shell--state)
+
+(defun fzfa-extra-annotate-buffer (cand)
+  "Annotate buffer-name CAND for `fzfa-buffer'-style pickers.
+
+Shows the buffer's file path (relative to `default-directory' when
+inside it), compilation status for compilation buffers, and agent
+-shell busy/idle state for agent-shell buffers."
+  (when-let* ((buf (get-buffer cand)))
+    (let ((parts nil))
+      (when-let* ((file (buffer-file-name buf)))
+        (push (if (string-prefix-p default-directory file)
+                  (substring file (length default-directory))
+                (abbreviate-file-name file))
+              parts))
+      (with-current-buffer buf
+        (when (derived-mode-p 'compilation-mode)
+          (push (if (get-buffer-process buf) "compiling" "compiled")
+                parts))
+        (when (bound-and-true-p agent-shell--state)
+          (let* ((state agent-shell--state)
+                 (busy (or (map-elt state :active-requests)
+                           (eq (map-elt (map-elt state :heartbeat) :status)
+                               'busy))))
+            (push (if busy "agent:busy" "agent:idle") parts))))
+      (when parts
+        (mapconcat #'identity (nreverse parts) "  ")))))
+
 ;;; Installation
 
 (add-hook 'minibuffer-setup-hook
           #'fzfa-extra--maybe-enable-grep-wgrep 90)
 
 (with-eval-after-load 'fzfa
-  ;; TRAMP-aware spawning for ssh/sshx methods.
-  (fzfa-extra--tramp-setup)
   ;; Shadow the default preview entries (alist-get takes the first
   ;; match): location previews additionally highlight query matches
   ;; and restore the origin position on abort; grep previews do the
