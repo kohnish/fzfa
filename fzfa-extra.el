@@ -114,6 +114,7 @@
 
 ;;; TRAMP
 
+;;;###autoload
 (defun fzfa-extra--tramp-transform (cmd dir)
   "Spawn transform for `fzfa-source-spawn-transform-function'.
 
@@ -139,11 +140,18 @@ the remote command through the remote shell either way."
   (setq fzfa-source-spawn-transform-function
         #'fzfa-extra--tramp-transform))
 
-;; Set unconditionally at load time: the transform is only a defvar
-;; assignment, safe before fzfa itself loads (`defvar' in fzfa.el
-;; does not clobber an already-bound value), and every producer spawn
-;; goes through `fzfa--spawn' which consults it.
-(fzfa-extra--tramp-setup)
+;; Install the transform eagerly via the autoloads file: the cookie
+;; below makes `make autoloads' emit this form into
+;; fzfa-autoloads.el, so package-activate sets the transform at
+;; startup — before any picker runs and regardless of which fzfa
+;; entry point is used.  `defvar' first so the setq binds the special
+;; variable even when fzfa.el has not been loaded yet (its own defvar
+;; will not clobber an already-bound value).
+;;;###autoload
+(progn
+  (defvar fzfa-source-spawn-transform-function)
+  (setq fzfa-source-spawn-transform-function
+        #'fzfa-extra--tramp-transform))
 
 ;;; Match highlighting in preview buffers
 
@@ -515,8 +523,15 @@ original position, like C-g) and opens the results buffer in
   :group 'fzfa)
 
 (defface fzfa-extra-annotation-status
-  '((t :inherit font-lock-type-face))
-  "Face for status flags in `fzfa-extra-annotate-buffer'."
+  '((t :weight bold))
+  "Face for idle status flags in `fzfa-extra-annotate-buffer'.
+Bold default-face text stays readable on any theme, unlike the
+light-grey `completions-annotations' face."
+  :group 'fzfa)
+
+(defface fzfa-extra-annotation-active
+  '((t (:inherit font-lock-warning-face :weight bold)))
+  "Face for active status flags (compiling, agent:busy)."
   :group 'fzfa)
 
 (defvar agent-shell--state)
@@ -526,8 +541,11 @@ original position, like C-g) and opens the results buffer in
 
 Shows the buffer's full file path (TRAMP paths kept verbatim),
 compilation status for compilation buffers, and agent-shell
-busy/idle state for agent-shell buffers.  Status flags get
-`fzfa-extra-annotation-status' so they stand out from the path."
+busy/idle state for agent-shell buffers.  The annotation is prefixed
+with a \"│\" separator since single-source pickers append it right
+after the candidate name; active states get
+`fzfa-extra-annotation-active', idle ones
+`fzfa-extra-annotation-status'."
   (when-let* ((buf (get-buffer cand)))
     (let ((path (when-let* ((file (buffer-file-name buf)))
                   ;; TRAMP names must stay verbatim; locally ~/ is
@@ -546,23 +564,32 @@ busy/idle state for agent-shell buffers.  Status flags get
                            (eq (map-elt (map-elt state :heartbeat) :status)
                                'busy))))
             (push (if busy "agent:busy" "agent:idle") status))))
-      (let ((status-str (mapconcat #'identity (nreverse status) " ")))
-        (cond
-         ((and path (not (string-empty-p status-str)))
-          (concat (propertize path 'face 'fzfa-extra-annotation-path)
-                  "   "
-                  (propertize status-str
-                              'face 'fzfa-extra-annotation-status)))
-         (path (propertize path 'face 'fzfa-extra-annotation-path))
-         ((not (string-empty-p status-str))
-          (propertize status-str 'face 'fzfa-extra-annotation-status))
-         (t nil))))))
+      (let* ((sep (propertize "    │ " 'face 'fzfa-extra-annotation-path))
+             (path-str (and path
+                            (propertize path
+                                        'face 'fzfa-extra-annotation-path)))
+             (status-str
+              (mapconcat
+               (lambda (s)
+                 (propertize s 'face
+                             (if (member s '("compiling" "agent:busy"))
+                                 'fzfa-extra-annotation-active
+                               'fzfa-extra-annotation-status)))
+               (nreverse status) " ")))
+        (when (or path-str (not (string-empty-p status-str)))
+          (concat sep
+                  (cond
+                   ((and path-str (not (string-empty-p status-str)))
+                    (concat path-str "   " status-str))
+                   (path-str path-str)
+                   (t status-str))))))))
 
 ;;; Commands
 
 ;; Entry points combining fzfa sources with this package's tweaks.
-;; They are plain defuns (not autoloaded); `(require 'fzfa-extra)' is
-;; expected in the user config anyway.
+;; All are ;;;###autoload-cookied so they work without an explicit
+;; (require 'fzfa-extra); the first call loads the file, installing
+;; hooks, advice, and the TRAMP transform.
 
 ;;;###autoload
 (defun fzfa-extra-recentf ()
