@@ -589,6 +589,15 @@ after the candidate name; active states get
         (when (derived-mode-p 'compilation-mode)
           (push (if (get-buffer-process buf) "compiling" "compiled")
                 status))
+        ;; A buffer-file-name that does not exist on disk means the
+        ;; file was never saved (find-file on a new path still sets
+        ;; buffer-file-name).  Skip the check for TRAMP paths —
+        ;; file-exists-p there costs a remote round-trip per
+        ;; candidate per redisplay.
+        (when (and (buffer-file-name buf)
+                   (not (file-remote-p (buffer-file-name buf)))
+                   (not (file-exists-p (buffer-file-name buf))))
+          (push "(unsaved)" status))
         ;; `agent-shell--state' is defvar-local WITH an init form, so
         ;; every buffer lazily gets a fresh non-nil state — the mode
         ;; check is what actually restricts this to agent-shell
