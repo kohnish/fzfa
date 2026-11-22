@@ -115,6 +115,23 @@
 ;;; TRAMP
 
 ;;;###autoload
+(defun fzfa-extra--ensure-tramp-transform (cmd dir)
+  "Re-install `fzfa-extra--tramp-transform' if it was clobbered.
+
+`fzfa--ensure-setup' calls `fzfa-tramp-setup' for the tramp
+extension on the first fzfa command of a session, resetting
+`fzfa-source-spawn-transform-function' to the ssh-only
+`fzfa-tramp--transform'.  This :before advice on `fzfa--spawn'
+restores ours — a superset that also handles sshx — whenever the
+variable is nil or holds the built-in transform.  Custom transforms
+installed by the user are left alone."
+  (ignore cmd dir)
+  (when (memq fzfa-source-spawn-transform-function
+              '(nil fzfa-tramp--transform))
+    (setq fzfa-source-spawn-transform-function
+          #'fzfa-extra--tramp-transform)))
+
+;;;###autoload
 (defun fzfa-extra--tramp-transform (cmd dir)
   "Spawn transform for `fzfa-source-spawn-transform-function'.
 
@@ -151,7 +168,14 @@ the remote command through the remote shell either way."
 (progn
   (defvar fzfa-source-spawn-transform-function)
   (setq fzfa-source-spawn-transform-function
-        #'fzfa-extra--tramp-transform))
+        #'fzfa-extra--tramp-transform)
+  ;; `fzfa--ensure-setup' calls `fzfa-tramp-setup' on the first fzfa
+  ;; command of a session, clobbering the transform with the ssh-only
+  ;; built-in.  The :before advice on `fzfa--spawn' self-heals it at
+  ;; spawn time; deferred so fzfa--spawn exists.
+  (with-eval-after-load 'fzfa
+    (advice-add 'fzfa--spawn :before
+                #'fzfa-extra--ensure-tramp-transform)))
 
 ;;; Match highlighting in preview buffers
 
@@ -518,10 +542,13 @@ original position, like C-g) and opens the results buffer in
 ;;; Buffer annotations
 
 (defface fzfa-extra-annotation-path
-  '((t (:inherit default)))
+  '((t nil))
   "Face for the file-path part of `fzfa-extra-annotate-buffer'.
-Plain default-face text: the path is the primary information and
-should not get the light-grey `completions-annotations' look."
+Deliberately empty: it only marks the text as propertized so vertico
+does not paint it with the light-grey `completions-annotations'
+face, while specifying no attributes lets the selection background
+show through (inheriting `default' would pin the frame background
+and hide it)."
   :group 'fzfa)
 
 (defface fzfa-extra-annotation-status
