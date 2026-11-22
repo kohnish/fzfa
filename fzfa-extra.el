@@ -47,6 +47,12 @@
 ;;   `helm-grep-run-save-buffer'); C-w does the same and jumps
 ;;   straight into wgrep mode.
 ;;
+;; - Preview toggle for buffer/grep pickers: `fzfa-buffer' and
+;;   `fzfa-grep' sessions start with live preview OFF; C-c f toggles
+;;   it helm-follow-style (off clears the preview, on previews the
+;;   current candidate immediately).  Other categories keep fzfa's
+;;   default preview behaviour.
+;;
 ;; - Vertico prompt-selection retone: when the query matches nothing,
 ;;   vertico selects its "prompt" row and paints `vertico-current'
 ;;   (inheriting `highlight' — a loud background in many themes) over
@@ -101,6 +107,7 @@
 (declare-function fzfa-visit-buffer "fzfa-emacs")
 (declare-function fzfa-visit-grep "fzfa-grep")
 (declare-function fzfa--max-columns-flag "fzfa")
+(declare-function fzfa--preview-call "fzfa")
 (declare-function fzfa--spawn "fzfa")
 (declare-function fzfa-tramp--build-ssh-cmd "fzfa-tramp")
 (declare-function tramp-dissect-file-name "tramp")
@@ -246,7 +253,14 @@ change nothing skip the buffer-wide search."
     (error (fzfa-extra--hl-log "uh error: %S" err))))
 
 (defun fzfa-extra--update-highlights-1 ()
-  (unless fzfa-extra--hl-disabled
+  ;; Preview-suppressed sessions (C-c f off) must not paint overlays
+  ;; either — this runs off the minibuffer's post-command-hook,
+  ;; outside `fzfa--preview-call'.
+  (if (fzfa-extra--preview-suppressed-p)
+      (progn
+        (setq fzfa-extra--hl-sig nil)
+        (fzfa-extra--clear-match-overlays))
+    (unless fzfa-extra--hl-disabled
     (let* ((win (fzfa-preview-get :origin-window))
            (buf (and (window-live-p win) (window-buffer win)))
            (mb (active-minibuffer-window))
@@ -264,7 +278,7 @@ change nothing skip the buffer-wide search."
         (setq fzfa-extra--hl-sig sig)
         (fzfa-extra--clear-match-overlays)
         (when (and buf (stringp query) (not (string-empty-p query)))
-          (fzfa-extra--paint-match-overlays buf query))))))
+          (fzfa-extra--paint-match-overlays buf query)))))))
 
 (defun fzfa-extra--preview-teardown ()
   "Clear match highlights and block further repaints."
@@ -278,6 +292,9 @@ change nothing skip the buffer-wide search."
   (if (null cand)
       ;; Session teardown dispatches :preview with nil.
       (fzfa-extra--preview-teardown)
+    ;; A live dispatch means preview is (back) on — clear the
+    ;; teardown latch so match overlays repaint again.
+    (setq fzfa-extra--hl-disabled nil)
     (fzfa--location-preview cand nil)
     (fzfa-extra--update-highlights)))
 
@@ -285,6 +302,7 @@ change nothing skip the buffer-wide search."
   "Preview a grep candidate, then highlight query matches in the file."
   (if (null cand)
       (fzfa-extra--preview-teardown)
+    (setq fzfa-extra--hl-disabled nil)
     (when (fzfa--grep-preview cand session)
       (fzfa-extra--update-highlights))))
 
@@ -432,6 +450,10 @@ every candidate — unlike `fzfa--grep-group', which strips it."
 (defvar fzfa-grep-wgrep-mode nil)
 (make-variable-buffer-local 'fzfa-grep-wgrep-mode)
 
+(defvar fzfa--preview-last)
+(defvar fzfa--preview-run-fn)
+(defvar fzfa--minibuffer-session)
+
 (defvar fzfa-grep-wgrep-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "C-x C-s") #'fzfa-grep-save-results)
@@ -546,6 +568,101 @@ original position, like C-g) and opens the results buffer in
                      (wgrep-change-to-wgrep-mode)))))
               nil t)
     (abort-minibuffers)))
+
+;;; Preview toggle (helm-follow-style)
+
+(defvar fzfa--preview-last)
+(defvar fzfa--preview-run-fn)
+(defvar fzfa--minibuffer-session)
+
+;; Buffer-local in the fzfa minibuffer: non-nil suppresses live
+;; :preview dispatch.  Default ON for `fzfa-buffer' and `fzfa-grep'
+;; pickers (see `fzfa-extra--maybe-enable-preview-toggle'); C-c f
+;; flips it.  The gate lives in `fzfa-extra--preview-call-advice'
+;; because fzfa fires previews from post-command-hook, idle timers,
+;; and the frontend exhibit — all outside any dynamic binding the
+;; command could let-bind.
+
+(defvar-local fzfa-extra--preview-suppressed nil
+  "Non-nil in an fzfa minibuffer where live preview is disabled.")
+
+(defun fzfa-extra--preview-suppressed-p ()
+  "Non-nil when the active fzfa minibuffer suppresses live preview.
+
+Reads the flag from the minibuffer buffer (not the current one):
+preview handlers run with the ORIGIN window/buffer selected, while
+`fzfa-extra--update-highlights' runs from the minibuffer's
+post-command-hook."
+  (when-let* ((mb (active-minibuffer-window))
+              ((window-live-p mb))
+              (buf (window-buffer mb)))
+    (buffer-local-value 'fzfa-extra--preview-suppressed buf)))
+
+(defun fzfa-extra-toggle-preview ()
+  "Toggle live preview in the current fzfa minibuffer.
+
+Preview is off by default in `fzfa-buffer' and `fzfa-grep' pickers;
+this switches it on — previewing the current candidate immediately —
+or off, clearing the visible preview.  Bound to C-c f by
+`fzfa-extra--maybe-enable-preview-toggle'."
+  (interactive)
+  (setq fzfa-extra--preview-suppressed
+        (not fzfa-extra--preview-suppressed))
+  (cond
+   (fzfa-extra--preview-suppressed
+    (message "fzfa preview: off")
+    ;; Tear down whatever is currently previewed (nil cand dispatch).
+    (when (and (boundp 'fzfa--minibuffer-session)
+               fzfa--minibuffer-session)
+      (fzfa--preview-call :preview fzfa--minibuffer-session nil)))
+   (t
+    (message "fzfa preview: on")
+    ;; Force re-preview of the current candidate: `run' skips
+    ;; candidates equal to `fzfa--preview-last', which was already
+    ;; updated by the suppressed dispatches.
+    (setq fzfa--preview-last 'unset)
+    (when (functionp fzfa--preview-run-fn)
+      (funcall fzfa--preview-run-fn)))))
+
+(defun fzfa-extra--preview-call-advice (orig action session &rest args)
+  "Around-advice for `fzfa--preview-call'.
+
+Drops live :preview dispatches (non-nil CAND) while
+`fzfa-extra--preview-suppressed' is set in the active minibuffer.
+Teardown (:preview nil), :setup/:exit/:return, and explicit
+`fzfa-preview-current' (C-c C-p) calls always pass through."
+  (if (and (eq action :preview)
+           (car args)
+           (not (eq this-command 'fzfa-preview-current))
+           (fzfa-extra--preview-suppressed-p))
+      nil
+    (apply orig action session args)))
+
+(defvar fzfa-extra-preview-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "C-c f") #'fzfa-extra-toggle-preview)
+    map)
+  "Keymap for fzfa-extra minibuffers; C-c f toggles live preview.")
+
+(defvar fzfa-extra-preview-mode nil)
+(make-variable-buffer-local 'fzfa-extra-preview-mode)
+
+(defun fzfa-extra--maybe-enable-preview-toggle ()
+  "In fzfa-buffer/fzfa-grep minibuffers, default preview off and
+bind C-c f to `fzfa-extra-toggle-preview'."
+  (when (and (bound-and-true-p fzfa--active-sources)
+             (vectorp fzfa--active-sources)
+             (> (length fzfa--active-sources) 0)
+             (seq-some (lambda (spec)
+                         (memq (plist-get spec :category)
+                               '(fzfa-buffer fzfa-grep)))
+                       fzfa--active-sources))
+    (setq-local fzfa-extra--preview-suppressed t)
+    (setq-local fzfa-extra-preview-mode t)
+    (setq-local minor-mode-map-alist
+                (cons (cons 'fzfa-extra-preview-mode
+                            fzfa-extra-preview-mode-map)
+                      minor-mode-map-alist))))
 
 ;;; Buffer annotations
 
@@ -830,6 +947,8 @@ Retones the input face per `fzfa-extra-vertico-prompt-face'."
           #'fzfa-extra--maybe-enable-vertico 90)
 (add-hook 'minibuffer-setup-hook
           #'fzfa-extra--maybe-enable-grep-wgrep 90)
+(add-hook 'minibuffer-setup-hook
+          #'fzfa-extra--maybe-enable-preview-toggle 90)
 
 (with-eval-after-load 'fzfa
   ;; Shadow the default preview entries (alist-get takes the first
@@ -854,7 +973,9 @@ Retones the input face per `fzfa-extra-vertico-prompt-face'."
   (advice-add 'fzfa-all-completions :around
               #'fzfa-extra--exact-first-advice)
   (advice-add 'fzfa-all-completions :around
-              #'fzfa-extra--grep-content-filter-advice))
+              #'fzfa-extra--grep-content-filter-advice)
+  (advice-add 'fzfa--preview-call :around
+              #'fzfa-extra--preview-call-advice))
 
 ;; Vertico is a separate package: fzfa loads it lazily, so the
 ;; prompt-selection advice waits for vertico itself.
