@@ -47,6 +47,12 @@
 ;;   `helm-grep-run-save-buffer'); C-w does the same and jumps
 ;;   straight into wgrep mode.
 ;;
+;; - Vertico prompt-selection retone: when the query matches nothing,
+;;   vertico selects its "prompt" row and paints `vertico-current'
+;;   (inheriting `highlight' — a loud background in many themes) over
+;;   the whole typed input.  An advice swaps in the quieter
+;;   `fzfa-extra-vertico-prompt-face' instead.
+;;
 ;; Enable by requiring this file:
 ;;
 ;;   (require 'fzfa-extra)
@@ -753,6 +759,69 @@ inside fzfa sessions keeps global vertico state untouched."
   (when (bound-and-true-p vertico--input)
     (setq-local vertico-mode t)))
 
+;;; Vertico prompt-selection face
+
+;; `vertico--prompt-selection' paints `vertico-current' over the whole
+;; minibuffer input whenever the "prompt" pseudo-candidate is the
+;; current selection — which is exactly what happens when the query
+;; matches no candidates (`vertico--index' = -1).  `vertico-current'
+;; inherits `highlight', a loud background colour in many themes
+;; (k9's is blue), so a long specific query suddenly turns the typed
+;; input blue.  The advice below swaps in a quieter face.
+
+(defcustom fzfa-extra-vertico-prompt-face 'bold
+  "Face for the minibuffer input while vertico's prompt row is current.
+
+See `fzfa-extra--retone-vertico-prompt'.  Set to nil to keep
+vertico's default `vertico-current' styling."
+  :type '(choice (const :tag "Vertico default" nil) face)
+  :group 'fzfa)
+
+(defun fzfa-extra--retone-vertico-prompt ()
+  "Swap `vertico-current' for `fzfa-extra-vertico-prompt-face' on input.
+
+Runs right after `vertico--prompt-selection': replaces every
+`vertico-current' mark between `minibuffer-prompt-end' and
+`point-max' with `fzfa-extra-vertico-prompt-face', and removes the
+latter again wherever `vertico-current' is absent, so the retone
+tracks each exhibit instead of lingering between them."
+  (when (and fzfa-extra-vertico-prompt-face (minibufferp))
+    (let ((inhibit-modification-hooks t)
+          (pos (minibuffer-prompt-end))
+          (end (point-max)))
+      (while (< pos end)
+        (let* ((next (or (next-single-property-change pos 'face nil end)
+                         end))
+               (val  (get-text-property pos 'face)))
+          (when (and val
+                     (or (symbolp val)
+                         (and (listp val)
+                              (cl-every #'symbolp val))))
+            (let* ((faces (if (listp val) val (list val)))
+                   (new (cond
+                         ((memq 'vertico-current faces)
+                          (mapcar (lambda (f)
+                                    (if (eq f 'vertico-current)
+                                        fzfa-extra-vertico-prompt-face
+                                      f))
+                                  faces))
+                         ((memq fzfa-extra-vertico-prompt-face faces)
+                          (delq fzfa-extra-vertico-prompt-face faces)))))
+              ;; A nil VALUE removes the `face' property.
+              (put-text-property pos next 'face
+                                 (cond ((null new) nil)
+                                       ((and (null (cdr new))
+                                             (symbolp val))
+                                        (car new))
+                                       (t new)))))
+          (setq pos next))))))
+
+(defun fzfa-extra--prompt-selection-advice (orig)
+  "Around-advice for `vertico--prompt-selection'.
+Retones the input face per `fzfa-extra-vertico-prompt-face'."
+  (funcall orig)
+  (fzfa-extra--retone-vertico-prompt))
+
 ;;; Installation
 
 (setq fzfa-preview-delay 0)
@@ -786,6 +855,12 @@ inside fzfa sessions keeps global vertico state untouched."
               #'fzfa-extra--exact-first-advice)
   (advice-add 'fzfa-all-completions :around
               #'fzfa-extra--grep-content-filter-advice))
+
+;; Vertico is a separate package: fzfa loads it lazily, so the
+;; prompt-selection advice waits for vertico itself.
+(with-eval-after-load 'vertico
+  (advice-add 'vertico--prompt-selection :around
+              #'fzfa-extra--prompt-selection-advice))
 
 (provide 'fzfa-extra)
 
