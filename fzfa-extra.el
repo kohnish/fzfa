@@ -76,6 +76,7 @@
 (defvar wgrep-header&footer-parser)
 (defvar fzf-native-filter-only-min-pool)
 (defvar fzfa-grep-command)
+(defvar fzfa-rg-command)
 (defvar fzfa-grep-wgrep-mode)
 (defvar fzfa-grep-wgrep-mode-map)
 (defvar vertico--input)
@@ -93,6 +94,7 @@
 (declare-function fzfa-swiper "fzfa")
 (declare-function fzfa-visit-buffer "fzfa-emacs")
 (declare-function fzfa-visit-grep "fzfa-grep")
+(declare-function fzfa--max-columns-flag "fzfa")
 (declare-function fzfa--spawn "fzfa")
 (declare-function fzfa-tramp--build-ssh-cmd "fzfa-tramp")
 (declare-function tramp-dissect-file-name "tramp")
@@ -707,21 +709,29 @@ too slow for large recentf lists."
 
 ;;;###autoload
 (defun fzfa-extra-grep ()
-  "Grep with exact content-only matching and wgrep export.
+  "Grep with rg (gitignore-aware) and wgrep export.
 
-Only the text after FILE:LINE: is matched (not filenames), exact
-substring hits are ordered first, and C-x C-s / C-w export the
-current candidates to a wgrep-capable buffer."
+Uses `fzfa-rg-command' when rg is available — ripgrep respects
+.gitignore/.ignore and skips hidden and binary files — falling back
+to `fzfa-grep-command' otherwise.  Only the text after FILE:LINE: is
+matched (not filenames), exact substring hits are ordered first,
+and C-x C-s / C-w export the current candidates to a wgrep-capable
+buffer."
   (interactive)
   (require 'vertico)
   (require 'fzfa-grep)
+  (require 'fzfa-rg)
   (with-no-warnings
     (vertico--advice
      (lambda ()
        (let ((fzfa-fuzzy nil)
-             (fzfa-extra--grep-content-only t))
+             (fzfa-extra--grep-content-only t)
+             (cmd (if (executable-find "rg")
+                      (format fzfa-rg-command
+                              (fzfa--max-columns-flag 'rg))
+                    fzfa-grep-command)))
          (when-let* ((r (fzfa-completing-read
-                         :command fzfa-grep-command
+                         :command cmd
                          :category 'fzfa-grep
                          :group #'fzfa-extra-grep-group)))
            (fzfa-visit-grep r)))))))
