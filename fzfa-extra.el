@@ -509,33 +509,54 @@ original position, like C-g) and opens the results buffer in
 
 ;;; Buffer annotations
 
+(defface fzfa-extra-annotation-path
+  '((t :inherit completions-annotations))
+  "Face for the file-path part of `fzfa-extra-annotate-buffer'."
+  :group 'fzfa)
+
+(defface fzfa-extra-annotation-status
+  '((t :inherit font-lock-type-face))
+  "Face for status flags in `fzfa-extra-annotate-buffer'."
+  :group 'fzfa)
+
 (defvar agent-shell--state)
 
 (defun fzfa-extra-annotate-buffer (cand)
   "Annotate buffer-name CAND for `fzfa-buffer'-style pickers.
 
-Shows the buffer's file path (relative to `default-directory' when
-inside it), compilation status for compilation buffers, and agent
--shell busy/idle state for agent-shell buffers."
+Shows the buffer's full file path (TRAMP paths kept verbatim),
+compilation status for compilation buffers, and agent-shell
+busy/idle state for agent-shell buffers.  Status flags get
+`fzfa-extra-annotation-status' so they stand out from the path."
   (when-let* ((buf (get-buffer cand)))
-    (let ((parts nil))
-      (when-let* ((file (buffer-file-name buf)))
-        (push (if (string-prefix-p default-directory file)
-                  (substring file (length default-directory))
-                (abbreviate-file-name file))
-              parts))
+    (let ((path (when-let* ((file (buffer-file-name buf)))
+                  ;; TRAMP names must stay verbatim; locally ~/ is
+                  ;; enough.
+                  (if (file-remote-p file)
+                      file
+                    (abbreviate-file-name file))))
+          (status nil))
       (with-current-buffer buf
         (when (derived-mode-p 'compilation-mode)
           (push (if (get-buffer-process buf) "compiling" "compiled")
-                parts))
+                status))
         (when (bound-and-true-p agent-shell--state)
           (let* ((state agent-shell--state)
                  (busy (or (map-elt state :active-requests)
                            (eq (map-elt (map-elt state :heartbeat) :status)
                                'busy))))
-            (push (if busy "agent:busy" "agent:idle") parts))))
-      (when parts
-        (mapconcat #'identity (nreverse parts) "  ")))))
+            (push (if busy "agent:busy" "agent:idle") status))))
+      (let ((status-str (mapconcat #'identity (nreverse status) " ")))
+        (cond
+         ((and path (not (string-empty-p status-str)))
+          (concat (propertize path 'face 'fzfa-extra-annotation-path)
+                  "   "
+                  (propertize status-str
+                              'face 'fzfa-extra-annotation-status)))
+         (path (propertize path 'face 'fzfa-extra-annotation-path))
+         ((not (string-empty-p status-str))
+          (propertize status-str 'face 'fzfa-extra-annotation-status))
+         (t nil))))))
 
 ;;; Commands
 
@@ -543,6 +564,7 @@ inside it), compilation status for compilation buffers, and agent
 ;; They are plain defuns (not autoloaded); `(require 'fzfa-extra)' is
 ;; expected in the user config anyway.
 
+;;;###autoload
 (defun fzfa-extra-recentf ()
   "Like `fzfa-recent-file', but with previews disabled.
 
@@ -554,6 +576,7 @@ too slow for large recentf lists."
     (with-no-warnings
       (vertico--advice #'fzfa-recent-file))))
 
+;;;###autoload
 (defun fzfa-extra-occur ()
   "Like `fzfa-swiper', with occur-style exact-first ordering."
   (interactive)
@@ -564,6 +587,7 @@ too slow for large recentf lists."
     (with-no-warnings
       (vertico--advice #'fzfa-swiper))))
 
+;;;###autoload
 (defun fzfa-extra-find ()
   "Like `fzfa-find'."
   (interactive)
@@ -571,6 +595,7 @@ too slow for large recentf lists."
   (with-no-warnings
     (vertico--advice #'fzfa-find)))
 
+;;;###autoload
 (defun fzfa-extra-buffers ()
   "Like `fzfa-buffer', annotated by `fzfa-extra-annotate-buffer'."
   (interactive)
@@ -589,6 +614,7 @@ too slow for large recentf lists."
                               :annotate #'fzfa-extra-annotate-buffer)))
            (fzfa-visit-buffer result)))))))
 
+;;;###autoload
 (defun fzfa-extra-execute-command ()
   "Like `fzfa-M-x'."
   (interactive)
@@ -596,6 +622,7 @@ too slow for large recentf lists."
   (with-no-warnings
     (vertico--advice #'fzfa-M-x)))
 
+;;;###autoload
 (defun fzfa-extra-grep ()
   "Grep with exact content-only matching and wgrep export.
 
