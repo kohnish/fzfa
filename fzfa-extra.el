@@ -74,6 +74,8 @@
 (defvar completion-lazy-hilit-fn)
 (defvar wgrep-line-file-regexp)
 (defvar wgrep-header&footer-parser)
+(defvar fzf-native-filter-only-min-pool)
+(defvar fzfa-grep-command)
 (defvar fzfa-grep-wgrep-mode)
 (defvar fzfa-grep-wgrep-mode-map)
 (defvar vertico--input)
@@ -84,6 +86,13 @@
 (declare-function fzfa--location-preview "fzfa")
 (declare-function fzfa--grep-preview "fzfa")
 (declare-function fzfa-candidate-directory "fzfa")
+(declare-function fzfa-completing-read "fzfa")
+(declare-function fzfa-find "fzfa")
+(declare-function fzfa-M-x "fzfa")
+(declare-function fzfa-recent-file "fzfa")
+(declare-function fzfa-swiper "fzfa")
+(declare-function fzfa-visit-buffer "fzfa-emacs")
+(declare-function fzfa-visit-grep "fzfa-grep")
 (declare-function fzfa--spawn "fzfa")
 (declare-function fzfa-tramp--build-ssh-cmd "fzfa-tramp")
 (declare-function tramp-dissect-file-name "tramp")
@@ -528,8 +537,99 @@ inside it), compilation status for compilation buffers, and agent
       (when parts
         (mapconcat #'identity (nreverse parts) "  ")))))
 
+;;; Commands
+
+;; Entry points combining fzfa sources with this package's tweaks.
+;; They are plain defuns (not autoloaded); `(require 'fzfa-extra)' is
+;; expected in the user config anyway.
+
+(defun fzfa-extra-recentf ()
+  "Like `fzfa-recent-file', but with previews disabled.
+
+Previews open every recent file on each selection change, which is
+too slow for large recentf lists."
+  (interactive)
+  (require 'vertico)
+  (let ((fzfa-preview-delay nil))
+    (with-no-warnings
+      (vertico--advice #'fzfa-recent-file))))
+
+(defun fzfa-extra-occur ()
+  "Like `fzfa-swiper', with occur-style exact-first ordering."
+  (interactive)
+  (require 'vertico)
+  (require 'fzfa-emacs)
+  (let ((fzf-native-filter-only-min-pool 1)
+        (fzfa-extra--exact-first-order t))
+    (with-no-warnings
+      (vertico--advice #'fzfa-swiper))))
+
+(defun fzfa-extra-find ()
+  "Like `fzfa-find'."
+  (interactive)
+  (require 'vertico)
+  (with-no-warnings
+    (vertico--advice #'fzfa-find)))
+
+(defun fzfa-extra-buffers ()
+  "Like `fzfa-buffer', annotated by `fzfa-extra-annotate-buffer'."
+  (interactive)
+  (require 'vertico)
+  (require 'fzfa-emacs)
+  (with-no-warnings
+    (vertico--advice
+     (lambda ()
+       (let* ((names (cl-loop for b in (buffer-list)
+                              unless (or (minibufferp b)
+                                         (string-prefix-p " " (buffer-name b)))
+                              collect (buffer-name b))))
+         (when-let* ((result (fzfa-completing-read
+                              :candidates names :prompt "buffer: "
+                              :category 'fzfa-buffer
+                              :annotate #'fzfa-extra-annotate-buffer)))
+           (fzfa-visit-buffer result)))))))
+
+(defun fzfa-extra-execute-command ()
+  "Like `fzfa-M-x'."
+  (interactive)
+  (require 'vertico)
+  (with-no-warnings
+    (vertico--advice #'fzfa-M-x)))
+
+(defun fzfa-extra-grep ()
+  "Grep with exact content-only matching and wgrep export.
+
+Only the text after FILE:LINE: is matched (not filenames), exact
+substring hits are ordered first, and C-x C-s / C-w export the
+current candidates to a wgrep-capable buffer."
+  (interactive)
+  (require 'vertico)
+  (require 'fzfa-grep)
+  (with-no-warnings
+    (vertico--advice
+     (lambda ()
+       (let ((fzfa-fuzzy nil)
+             (fzfa-extra--grep-content-only t))
+         (when-let* ((r (fzfa-completing-read
+                         :command fzfa-grep-command
+                         :category 'fzfa-grep
+                         :group #'fzfa-extra-grep-group)))
+           (fzfa-visit-grep r)))))))
+
+(defun fzfa-extra--maybe-enable-vertico ()
+  "Enable `vertico-mode' in minibuffers where `vertico--input' is active.
+
+fzfa's display machinery keys off `vertico-mode'; enabling it only
+inside fzfa sessions keeps global vertico state untouched."
+  (when (bound-and-true-p vertico--input)
+    (setq-local vertico-mode t)))
+
 ;;; Installation
 
+(setq fzfa-preview-delay 0)
+
+(add-hook 'minibuffer-setup-hook
+          #'fzfa-extra--maybe-enable-vertico 90)
 (add-hook 'minibuffer-setup-hook
           #'fzfa-extra--maybe-enable-grep-wgrep 90)
 
