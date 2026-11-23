@@ -91,6 +91,7 @@
 (defvar fzfa-rg-command)
 (defvar fzfa-grep-wgrep-mode)
 (defvar fzfa-grep-wgrep-mode-map)
+(defvar compilation-in-progress)
 (defvar vertico--input)
 (defvar vertico--candidates)
 
@@ -730,9 +731,17 @@ after the candidate name; active states get
                     (abbreviate-file-name file))))
           (status nil))
       (with-current-buffer buf
-        (when (derived-mode-p 'compilation-mode)
-          (push (if (get-buffer-process buf) "compiling" "compiled")
-                status))
+        (let ((proc (get-buffer-process buf)))
+          ;; `compile' buffers report via `compilation-mode', but
+          ;; `ghostel-compile' (behind `compile-with-buf-name') runs
+          ;; in `ghostel-mode' instead.  Both push their process onto
+          ;; `compilation-in-progress', which is the reliable
+          ;; still-running signal across both.
+          (when (or (derived-mode-p 'compilation-mode)
+                    (and proc
+                         (bound-and-true-p compilation-in-progress)
+                         (memq proc compilation-in-progress)))
+            (push (if proc "compiling" "compiled") status)))
         ;; A buffer-file-name that does not exist on disk means the
         ;; file was never saved (find-file on a new path still sets
         ;; buffer-file-name).  Skip the check for TRAMP paths —
