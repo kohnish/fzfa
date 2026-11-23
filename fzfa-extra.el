@@ -347,6 +347,27 @@ minibuffer buffer explicitly."
 
 ;;; Candidate ordering and grep content filtering
 
+(defvar fzfa-extra--occur-initial-input nil
+  "When non-nil, injected as `:initial-input' into the
+`fzfa-completing-read' call made by `fzfa-swiper'.  Bound by
+`fzfa-extra-occur' so the picker opens pre-filled with the symbol
+under point, like `helm-occur'.")
+
+(defun fzfa-extra--inject-initial-input (orig &rest args)
+  "Around-advice for `fzfa-completing-read'.
+
+While `fzfa-extra--occur-initial-input' is bound, appends
+`:initial-input' to ARGS unless the caller already supplied one.
+Restricted to `fzfa-location' sessions so nested reads (e.g. an
+interactive `:directory' prompt) inside the session are untouched."
+  (if (and fzfa-extra--occur-initial-input
+           (eq (plist-get args :category) 'fzfa-location)
+           (not (plist-member args :initial-input)))
+      (apply orig (append args
+                          (list :initial-input
+                                fzfa-extra--occur-initial-input)))
+    (apply orig args)))
+
 (defvar fzfa-extra--exact-first-order nil
   "When non-nil, exact query-substring matches sort ahead of
 fuzzy-only matches in `fzfa-all-completions' (order preserved within
@@ -794,12 +815,15 @@ too slow for large recentf lists."
 
 ;;;###autoload
 (defun fzfa-extra-occur ()
-  "Like `fzfa-swiper', with occur-style exact-first ordering."
+  "Like `fzfa-swiper', with occur-style exact-first ordering.
+
+Pre-fills the query with the symbol under point, like `helm-occur'."
   (interactive)
   (require 'vertico)
   (require 'fzfa-emacs)
   (let ((fzf-native-filter-only-min-pool 1)
-        (fzfa-extra--exact-first-order t))
+        (fzfa-extra--exact-first-order t)
+        (fzfa-extra--occur-initial-input (thing-at-point 'symbol)))
     (with-no-warnings
       (vertico--advice #'fzfa-swiper))))
 
@@ -975,7 +999,10 @@ Retones the input face per `fzfa-extra-vertico-prompt-face'."
   (advice-add 'fzfa-all-completions :around
               #'fzfa-extra--grep-content-filter-advice)
   (advice-add 'fzfa--preview-call :around
-              #'fzfa-extra--preview-call-advice))
+              #'fzfa-extra--preview-call-advice)
+  ;; `fzfa-extra-occur' pre-fill; inert unless the dynamic flag is bound.
+  (advice-add 'fzfa-completing-read :around
+              #'fzfa-extra--inject-initial-input))
 
 ;; Vertico is a separate package: fzfa loads it lazily, so the
 ;; prompt-selection advice waits for vertico itself.
