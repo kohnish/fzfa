@@ -95,6 +95,7 @@
 (defvar vertico--input)
 (defvar vertico--candidates)
 
+(declare-function agent-shell-status "agent-shell")
 (declare-function fzfa-preview-get "fzfa")
 (declare-function fzfa-preview-show "fzfa")
 (declare-function fzfa--location-preview "fzfa")
@@ -707,17 +708,42 @@ light-grey `completions-annotations' face."
 
 (defface fzfa-extra-annotation-active
   '((t (:inherit font-lock-warning-face :weight bold)))
-  "Face for active status flags (compiling, agent:busy)."
+  "Face for active status flags (compiling, agent:busy, agent:waiting,
+failed compilations)."
   :group 'fzfa)
 
 (defvar agent-shell--state)
+
+(defvar-local fzfa-extra--compile-exit nil
+  "Exit status recorded for a finished compilation buffer.
+
+Set by `fzfa-extra--record-compile-exit' on
+`compilation-finish-functions': a number for normal exits, the
+symbol `signal' when the process died by signal, nil when no status
+was recorded (e.g. the buffer predates the hook).")
+
+(defun fzfa-extra--record-compile-exit (buffer _msg)
+  "Record BUFFER's compilation exit status in `fzfa-extra--compile-exit'.
+
+Runs on `compilation-finish-functions', which fires while the
+finished process is still on `compilation-in-progress' — stock
+`compile' keeps no exit status, so this is the only place to grab
+it.  Covers `ghostel-compile' too, which runs the same hook."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (when-let* ((proc (cl-find-if
+                         (lambda (p) (eq (process-buffer p) buffer))
+                         compilation-in-progress)))
+        (setq fzfa-extra--compile-exit
+              (or (process-exit-status proc) 'signal))))))
 
 (defun fzfa-extra-annotate-buffer (cand)
   "Annotate buffer-name CAND for `fzfa-buffer'-style pickers.
 
 Shows the buffer's full file path (TRAMP paths kept verbatim),
-compilation status for compilation buffers, and agent-shell
-busy/idle state for agent-shell buffers.  The annotation is prefixed
+compilation status for compilation buffers (including the recorded
+exit status once finished), and agent-shell busy/waiting/idle state
+for agent-shell buffers.  The annotation is prefixed
 with a \"│\" separator since single-source pickers append it right
 after the candidate name; active states get
 `fzfa-extra-annotation-active', idle ones
@@ -741,7 +767,16 @@ after the candidate name; active states get
                     (and proc
                          (bound-and-true-p compilation-in-progress)
                          (memq proc compilation-in-progress)))
-            (push (if proc "compiling" "compiled") status)))
+            (push (cond
+                   (proc "compiling")
+                   ((eq fzfa-extra--compile-exit 'signal)
+                    "compiled:killed")
+                   ((numberp fzfa-extra--compile-exit)
+                    (if (zerop fzfa-extra--compile-exit)
+                        "compiled:ok"
+                      (format "compiled:exit %d" fzfa-extra--compile-exit)))
+                   (t "compiled"))
+                  status)))
         ;; A buffer-file-name that does not exist on disk means the
         ;; file was never saved (find-file on a new path still sets
         ;; buffer-file-name).  Skip the check for TRAMP paths —
@@ -754,14 +789,27 @@ after the candidate name; active states get
         ;; `agent-shell--state' is defvar-local WITH an init form, so
         ;; every buffer lazily gets a fresh non-nil state — the mode
         ;; check is what actually restricts this to agent-shell
-        ;; buffers.
+        ;; buffers.  `agent-shell-status' distinguishes `blocked'
+        ;; (waiting for a permission/elicitation answer) from plain
+        ;; `busy'; fall back to the raw state flags on older versions.
         (when (and (derived-mode-p 'agent-shell-mode)
                    (bound-and-true-p agent-shell--state))
           (let* ((state agent-shell--state)
-                 (busy (or (map-elt state :active-requests)
-                           (eq (map-elt (map-elt state :heartbeat) :status)
-                               'busy))))
-            (push (if busy "agent:busy" "agent:idle") status))))
+                 (status-sym
+                  (or (and (fboundp 'agent-shell-status)
+                           (ignore-errors
+                             (agent-shell-status :shell-buffer buf)))
+                      (if (or (map-elt state :active-requests)
+                              (eq (map-elt (map-elt state :heartbeat)
+                                           :status)
+                                  'busy))
+                          'busy
+                        'ready))))
+            (push (pcase status-sym
+                    ('busy "agent:busy")
+                    ('blocked "agent:waiting")
+                    (_ "agent:idle"))
+                  status))))
       (let* ((sep (propertize "    │ " 'face 'fzfa-extra-annotation-path))
              (path-str (and path
                             (propertize path
@@ -770,7 +818,10 @@ after the candidate name; active states get
               (mapconcat
                (lambda (s)
                  (propertize s 'face
-                             (if (member s '("compiling" "agent:busy"))
+                             (if (or (member s '("compiling" "agent:busy"
+                                                  "agent:waiting"))
+                                     (and (string-prefix-p "compiled:" s)
+                                          (not (string= s "compiled:ok"))))
                                  'fzfa-extra-annotation-active
                                'fzfa-extra-annotation-status)))
                (nreverse status) " ")))
@@ -982,6 +1033,11 @@ Retones the input face per `fzfa-extra-vertico-prompt-face'."
           #'fzfa-extra--maybe-enable-grep-wgrep 90)
 (add-hook 'minibuffer-setup-hook
           #'fzfa-extra--maybe-enable-preview-toggle 90)
+
+;; Record compilation exit statuses for `fzfa-extra-annotate-buffer'.
+(with-eval-after-load 'compile
+  (add-hook 'compilation-finish-functions
+            #'fzfa-extra--record-compile-exit))
 
 (with-eval-after-load 'fzfa
   ;; Shadow the default preview entries (alist-get takes the first
